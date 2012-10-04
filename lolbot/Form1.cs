@@ -124,15 +124,11 @@ namespace lolbot
             logger.Info("Adding Keyboard hooks..");
             gkh.HookedKeys.Add(Keys.F1);
             gkh.HookedKeys.Add(Keys.F2);
+            gkh.HookedKeys.Add(Keys.F3);
             keyCallback = new KeyEventHandler(onHookKeyDown);
             gkh.KeyDown += keyCallback;          
         }
 
-        private void FinishBot()
-        {
-            logger.Info("Finishing bot...");
-            
-        }
         void onHookKeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.F1)
@@ -141,12 +137,24 @@ namespace lolbot
                 Start();
                 e.Handled = true;
             }
-            else if (e.KeyCode == Keys.F2)
+            if (e.KeyCode == Keys.F2)
             {
                 logger.Debug("Catched F2. End monitoring");
                 End();
                 e.Handled = true;
             }
+            if (e.KeyCode == Keys.F3)
+            {
+                logger.Debug("Catched F3. Setting Home");
+                SetCursorAsHome();
+                e.Handled = true;
+            }
+        }
+        
+
+        private void FinishBot()
+        {
+            logger.Info("Finishing bot...");
         }
         
         private bool getLoLWindow()
@@ -172,50 +180,59 @@ namespace lolbot
             return bmp;
         }
 
-        private void processImage()
+        private void processImage(Bitmap bmp, Boolean doAction)
         {
-            if (running) { return; }
             
-            logger.Debug("Active Window : " + GetActiveWindowTitle());
-            if (!GetActiveWindowTitle().StartsWith("League of ")) { return; }
-            running = true;
+            logger.Debug("Start process image : " + DateTime.Now.ToString());
 
-            logger.Debug("Start capturing : " + DateTime.Now.ToString());
-
+            // Image State
             List<Minion> l_minions = new List<Minion>();
             List<Minion> our_minions = new List<Minion>();
-
-            Bitmap bmp = CaptureGameRegion();
+            
+            
             BitmapData bmd = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
                                   System.Drawing.Imaging.ImageLockMode.ReadWrite,
                                   bmp.PixelFormat);
             Point center = new Point( bmp.Width / 2,bmp.Height / 2);
             
+            
             // find minions
             unsafe
             {
+                int BLUE_OFFSET = 0;
+                int GREEN_OFFSET = 1;
+                int RED_OFFSET = 2;
+                int ALPHA_OFFSET = 3;
+
+                int healthbar_width_half = 32;
+                int minion_height_half = 22;
+            
                 int PixelSize=4;
+
+                // find minions
                 for (int y = 1; y < bmd.Height; y++)
                 {
+                    // blue, green, red, alpha
                     byte* prevrow = (byte*)bmd.Scan0 + ((y - 1) * bmd.Stride);
                     byte* row = (byte*)bmd.Scan0 + (y * bmd.Stride);
 
                     for (int x = 1; x < bmd.Width; x++)
                     {
-                        byte p1 = prevrow[(x-1) * PixelSize + 2];
-                        byte p2 = prevrow[(x) * PixelSize + 2];
-                        byte p3 = row[(x - 1) * PixelSize + 2];
-                        byte p4 = row[(x) * PixelSize + 2];
+                        // red
+                        byte p1 = prevrow[(x-1) * PixelSize + RED_OFFSET];
+                        byte p2 = prevrow[(x) * PixelSize + RED_OFFSET];
+                        byte p3 = row[(x - 1) * PixelSize + RED_OFFSET];
+                        byte p4 = row[(x) * PixelSize + RED_OFFSET];
                         if (p1 == 0 && p2 == 0 && p3 == 0 && p4 == 255)
                         {
                             int x_org = x;
                             int hp = 0;
-                            while (row[x * PixelSize + 2] == 255)
+                            while (row[x * PixelSize + RED_OFFSET] == 255)
                             {
                                 x++;
                             }
                             hp = x - x_org;
-                            while (prevrow[x * PixelSize + 2] == 0)
+                            while (prevrow[x * PixelSize + RED_OFFSET] == 0)
                             
                             {
                                 x++;
@@ -225,8 +242,8 @@ namespace lolbot
                             if (all > 70) { continue; }
                             float hp_perc = (float)hp / (float)all;
                             Minion m = new Minion();
-                            m.p.X = x_org + 32;
-                            m.p.Y = y + 22;
+                            m.p.X = x_org + healthbar_width_half;
+                            m.p.Y = y + minion_height_half;
                             m.hp = hp_perc;
                             m.dist = DistanceTo(m.p, center);
                             l_minions.Add(m);
@@ -235,11 +252,11 @@ namespace lolbot
                             logger.Debug(msg);
                         }
 
-
-                        p1 = prevrow[(x - 1) * PixelSize + 1];
-                        p2 = prevrow[(x) * PixelSize + 1];
-                        p3 = row[(x - 1) * PixelSize + 1];
-                        p4 = row[(x) * PixelSize + 1];
+                        // green
+                        p1 = prevrow[(x - 1) * PixelSize + GREEN_OFFSET];
+                        p2 = prevrow[(x) * PixelSize + GREEN_OFFSET];
+                        p3 = row[(x - 1) * PixelSize + GREEN_OFFSET];
+                        p4 = row[(x) * PixelSize + GREEN_OFFSET];
 
                         if (p1 == 0 && p2 == 0 && p3 == 0 && p4 > 200)
                         {
@@ -275,154 +292,175 @@ namespace lolbot
                         //byte al = row[x * PixelSize + 3]; //Alpha 0-255
                     }
                 }
+
+                // read minimap
+                
+                for (int y = (int)(0.7 * bmd.Height); y < bmd.Height; y++)
+                {
+                    // blue, green, red, alpha
+                    byte* prevrow = (byte*)bmd.Scan0 + ((y - 1) * bmd.Stride);
+                    byte* row = (byte*)bmd.Scan0 + (y * bmd.Stride);
+
+                    for (int x = (int)(0.7 * bmd.Width); x < bmd.Width; x++)
+                    {
+                        // red
+                        byte p1 = prevrow[(x - 1) * PixelSize + RED_OFFSET];
+                        byte p2 = prevrow[(x) * PixelSize + RED_OFFSET];
+                        byte p3 = row[(x - 1) * PixelSize + RED_OFFSET];
+                        byte p4 = row[(x) * PixelSize + RED_OFFSET];
+                    }
+                }
             }
             bmp.UnlockBits(bmd);
 
             // decide actions
-            double advcnt = Math.Max(0.0, (double)(l_minions.Count) / our_minions.Count - 1.0);
-            double thres = 0.15 + 0.1 * advcnt;
-
-            
-            Boolean found = false;
-            Minion target;
-            target.p = Point.Empty;
-
-
-            double mindist_enemy = 99999.0;
-            double mindist_our = 99999.0;
-            foreach (Minion m in l_minions)
+            if (doAction)
             {
-                if (m.dist < mindist_enemy)
+                double advcnt = Math.Max(0.0, (double)(l_minions.Count) / our_minions.Count - 1.0);
+                double thres = 0.15 + 0.1 * advcnt;
+
+
+                Boolean found = false;
+                Minion target;
+                target.p = Point.Empty;
+
+
+                double mindist_enemy = 99999.0;
+                double mindist_our = 99999.0;
+                foreach (Minion m in l_minions)
                 {
-                    mindist_enemy = m.dist;
-                }
-            }
-            foreach (Minion m in our_minions)
-            {
-                if (m.dist < mindist_our)
-                {
-                    mindist_our = m.dist;
-                }
-            }
-            
-            if ( mindist_our >= mindist_enemy)
-            {
-                rClick(pHome);
-                logger.Debug("Going Home");
-                running = false;
-                return;
-            }
-
-            // lost shot first
-            foreach(Minion m in l_minions){
-                if (m.hp < thres) {
-                    if (found && DistanceTo(m.p, center) < DistanceTo(target.p, center))
+                    if (m.dist < mindist_enemy)
                     {
-                        target = m;
-                    }
-                    else
-                    {
-                        found = true;
-                        target = m;
+                        mindist_enemy = m.dist;
                     }
                 }
-            }
-
-
-
-            if (found)
-            {
-                logger.Debug( "Killing Minion");
-                rClick(target.p);
-            }
-            else
-            {
-                // Get center position of minions
-                double maxdist = 0.0;
-                double minhp = 99999.0;
-                double mindist = 999999.0;
-                Point farest = new Point();
-                int size = 0;
-
-                Point closest = new Point();
-                // need to close our minion
                 foreach (Minion m in our_minions)
                 {
-                    if (DistanceTo(m.p, center) < mindist)
+                    if (m.dist < mindist_our)
                     {
-                        mindist = DistanceTo(m.p, center);
-                        closest = m.p;
+                        mindist_our = m.dist;
                     }
                 }
 
-                if (mindist > 300 && mindist < 1000)
+                if (mindist_our >= mindist_enemy)
                 {
-                    size = 1;
-                    farest = closest;
-                    maxdist = 99999.0;
+                    rClick(pHome);
+                    logger.Debug("Going Home");
+                    running = false;
+                    return;
                 }
 
-                if (size == 0)
+                // lost shot first
+                foreach (Minion m in l_minions)
                 {
-                    foreach (Minion m in l_minions)
+                    if (m.hp < thres)
                     {
-                        if (m.hp < 0.5)
+                        if (found && DistanceTo(m.p, center) < DistanceTo(target.p, center))
                         {
-                            size += 1;
-                            
-                            if (m.hp < minhp)
-                            {
-                                maxdist = DistanceTo(m.p, center);
-                                farest = m.p;
-                                minhp = m.hp;
-                            }
+                            target = m;
+                        }
+                        else
+                        {
+                            found = true;
+                            target = m;
                         }
                     }
                 }
 
-                if (size == 0 && our_minions.Count > 0)
+
+
+                if (found)
                 {
-                    // follow our minion
-                    maxdist = 999.0;
-                    farest = our_minions[0].p;
-                    size = 1;
+                    logger.Debug("Killing Minion");
+                    rClick(target.p);
                 }
+                else
+                {
+                    // Get center position of minions
+                    double maxdist = 0.0;
+                    double minhp = 99999.0;
+                    double mindist = 999999.0;
+                    Point farest = new Point();
+                    int size = 0;
 
-                if (size > 0)
-                {   
-                    Random rand = new Random();
-                    double range = 150.0;
-                    Point x = new Point();
-                    if (maxdist < range )
+                    Point closest = new Point();
+                    // need to close our minion
+                    foreach (Minion m in our_minions)
                     {
-                        x.X = farest.X - center.X;
-                        x.Y = farest.Y - center.Y;
-                        if (x.X > 0) x.X = 30 + (rand.Next() % 40 - 20);
-                        if (x.X < 0) x.X = 800 +(rand.Next() % 40 - 20);
-                        if (x.Y > 0) x.Y = 50 + (rand.Next() % 40 - 20);
-                        if (x.Y < 0) x.Y = 600 + (rand.Next() % 40 - 20);
-
-                        logger.Debug("escape to center");
-                        rClick(x);
-
+                        if (DistanceTo(m.p, center) < mindist)
+                        {
+                            mindist = DistanceTo(m.p, center);
+                            closest = m.p;
+                        }
                     }
-                    else if (maxdist > range)
-                    {
-                        x.X = farest.X - center.X;
-                        x.Y = farest.Y - center.Y;
-                        if (x.X > 0) x.X = 800 + (rand.Next() % 40 - 20);
-                        if (x.X < 0) x.X = 30 + (rand.Next() % 40 - 20);
-                        if (x.Y > 0) x.Y = 600 + (rand.Next() % 40 - 20);
-                        if (x.Y < 0) x.Y = 50 + (rand.Next() % 40 - 20);
 
-                        logger.Debug("Move to center");
-                        rClick(x);
+                    if (mindist > 300 && mindist < 1000)
+                    {
+                        size = 1;
+                        farest = closest;
+                        maxdist = 99999.0;
+                    }
+
+                    if (size == 0)
+                    {
+                        foreach (Minion m in l_minions)
+                        {
+                            if (m.hp < 0.5)
+                            {
+                                size += 1;
+
+                                if (m.hp < minhp)
+                                {
+                                    maxdist = DistanceTo(m.p, center);
+                                    farest = m.p;
+                                    minhp = m.hp;
+                                }
+                            }
+                        }
+                    }
+
+                    if (size == 0 && our_minions.Count > 0)
+                    {
+                        // follow our minion
+                        maxdist = 999.0;
+                        farest = our_minions[0].p;
+                        size = 1;
+                    }
+
+                    if (size > 0)
+                    {
+                        Random rand = new Random();
+                        double range = 150.0;
+                        Point x = new Point();
+                        if (maxdist < range)
+                        {
+                            x.X = farest.X - center.X;
+                            x.Y = farest.Y - center.Y;
+                            if (x.X > 0) x.X = 30 + (rand.Next() % 40 - 20);
+                            if (x.X < 0) x.X = 800 + (rand.Next() % 40 - 20);
+                            if (x.Y > 0) x.Y = 50 + (rand.Next() % 40 - 20);
+                            if (x.Y < 0) x.Y = 600 + (rand.Next() % 40 - 20);
+
+                            logger.Debug("escape to center");
+                            rClick(x);
+
+                        }
+                        else if (maxdist > range)
+                        {
+                            x.X = farest.X - center.X;
+                            x.Y = farest.Y - center.Y;
+                            if (x.X > 0) x.X = 800 + (rand.Next() % 40 - 20);
+                            if (x.X < 0) x.X = 30 + (rand.Next() % 40 - 20);
+                            if (x.Y > 0) x.Y = 600 + (rand.Next() % 40 - 20);
+                            if (x.Y < 0) x.Y = 50 + (rand.Next() % 40 - 20);
+
+                            logger.Debug("Move to center");
+                            rClick(x);
+                        }
                     }
                 }
             }
 
-
-            running = false;
         }
         public double DistanceTo(Point point1, Point point2)
         {
@@ -452,12 +490,23 @@ namespace lolbot
             //mouse_event(MOUSEEVENTF_RIGHTUP, (uint)Cursor.Position.X, (uint)Cursor.Position.Y, 0, 0);
         }
         private void Start()
-        { 
+        {
+            if (!getLoLWindow())
+            {
+                logger.Error("Can't find LoL Window");
+            }
+          
             timer1.Enabled = true;
         }
         private void End()
         {
             timer1.Enabled = false;
+        }
+
+        private void SetCursorAsHome()
+        {
+            pHome = new Point(Cursor.Position.X - wRect.Left, Cursor.Position.Y - wRect.Top);
+            logger.Debug("Setting home as : " + pHome.ToString());
         }
 
         private void button1_Click(object sender, EventArgs e)
@@ -478,7 +527,12 @@ namespace lolbot
 
         private void timer1_Tick(object sender, EventArgs e)
         {
-            processImage();
+            Bitmap bmp = CaptureGameRegion();
+            if (running) { return; }
+            if (!GetActiveWindowTitle().StartsWith("League of ")) { return; }
+            running = true;
+            processImage(bmp, true);
+            running = false;
         }
 
         private void Form1_Load(object sender, EventArgs e)
@@ -491,8 +545,6 @@ namespace lolbot
             FinishBot();
         }
 
-        string workingImgFilePath;
-
         private void chooseFile_Click(object sender, EventArgs e)
         {
             logger.Info("Capturing game screen to save.");
@@ -500,9 +552,36 @@ namespace lolbot
 
             saveImgFileDialog1.InitialDirectory = "D:";
             saveImgFileDialog1.Filter = "BMP Images|*.bmp";
-            saveImgFileDialog1.ShowDialog();
-            bmp.Save(saveImgFileDialog1.FileName);
-            logger.Info("Capture saved as : " + saveImgFileDialog1.FileName);
+            DialogResult r = saveImgFileDialog1.ShowDialog();
+            if (r == DialogResult.OK)
+            {
+                bmp.Save(saveImgFileDialog1.FileName);
+                logger.Info("Capture saved as : " + saveImgFileDialog1.FileName);
+            }
+        }
+
+        Bitmap loadedBitmap;
+
+        private void button2_Click(object sender, EventArgs e)
+        {
+            openImgFileDialog1.Filter = "BMP Images|*.bmp";
+            DialogResult r = openImgFileDialog1.ShowDialog();
+            if (r == DialogResult.OK)
+            {
+                Bitmap bmp = new Bitmap(openImgFileDialog1.FileName);
+                pCapture.SizeMode = PictureBoxSizeMode.StretchImage;
+                for(int i = 0; i < bmp.Height; i ++){
+                    for( int j = 0; j < bmp.Width; j++){
+                        Color p = bmp.GetPixel(j, i);
+                        
+                        bmp.SetPixel(j, i, Color.FromArgb( p.R, p.R, p.R));
+                    }
+                }
+                pCapture.Image = bmp;
+                loadedBitmap = bmp;
+            }     
+        
+            processImage(loadedBitmap, false);
         }
     }
 }
