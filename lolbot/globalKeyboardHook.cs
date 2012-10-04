@@ -42,6 +42,7 @@ namespace Utilities
         /// Handle to the hook, need this to unhook and call the next hook
         /// </summary>
         IntPtr hhook = IntPtr.Zero;
+        keyboardHookProc _hookProc;
         #endregion
 
         #region Events
@@ -81,7 +82,8 @@ namespace Utilities
         public void hook()
         {
             IntPtr hInstance = LoadLibrary("User32");
-            hhook = SetWindowsHookEx(WH_KEYBOARD_LL, hookProc, hInstance, 0);
+            _hookProc = hookProc;
+            hhook = SetWindowsHookEx(WH_KEYBOARD_LL, _hookProc, hInstance, 0);
         }
 
         /// <summary>

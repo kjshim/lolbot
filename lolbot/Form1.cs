@@ -98,8 +98,8 @@ namespace lolbot
         }
 
         Point pHome = new Point(936, 780);
-        IntPtr hWnd;
-        RECT wRect;
+        IntPtr hWnd = IntPtr.Zero;
+        RECT wRect = new RECT();
         Boolean running = false;
         ILog logger = log4net.LogManager.GetLogger("LolBot");
         
@@ -109,31 +109,28 @@ namespace lolbot
 
             
         }
+
+        KeyEventHandler keyCallback;
     
         private void InitBot() {
             logger.Info("Initializing bot...");
 
-            hWnd = getLoLWindow();
-            wRect = new RECT();
-            GetWindowRect(hWnd, ref wRect);
-
-            //            SendKeys.SendWait("111");
-            SetForegroundWindow(hWnd);
-            Thread.Sleep(100);
-
+            if (!getLoLWindow())
+            {
+                logger.Error("Can't find LoL Window");
+            }
+          
             // add keyboard hook
             logger.Info("Adding Keyboard hooks..");
             gkh.HookedKeys.Add(Keys.F1);
             gkh.HookedKeys.Add(Keys.F2);
-            gkh.KeyDown += new KeyEventHandler(onHookKeyDown);
-
-            gkh.hook();
+            keyCallback = new KeyEventHandler(onHookKeyDown);
+            gkh.KeyDown += keyCallback;          
         }
 
         private void FinishBot()
         {
             logger.Info("Finishing bot...");
-            gkh.unhook();
             
         }
         void onHookKeyDown(object sender, KeyEventArgs e)
@@ -142,48 +139,57 @@ namespace lolbot
             {
                 logger.Debug("Catched F1. Starting monitoring");
                 Start();
+                e.Handled = true;
             }
-            if (e.KeyCode == Keys.F2)
+            else if (e.KeyCode == Keys.F2)
             {
                 logger.Debug("Catched F2. End monitoring");
                 End();
+                e.Handled = true;
             }
-            e.Handled = true;
         }
         
-        private IntPtr getLoLWindow()
+        private bool getLoLWindow()
         {
-            foreach (Process proc in Process.GetProcesses())
+            hWnd = WndSearcher.SearchForWindow("", "League of Legends");
+            if (hWnd != IntPtr.Zero)
             {
-                if (proc.MainWindowTitle.StartsWith("League of "))
-                {
-                    IntPtr handle = proc.MainWindowHandle;
-                    return handle;
-                }
+                
+                GetWindowRect(hWnd, ref wRect);
+                //SetForegroundWindow(hWnd);
+                logger.Debug("Located LOL Window : (" + wRect.Left.ToString() + "," + wRect.Top.ToString() + ")");
+                return true;
             }
-            return IntPtr.Zero;
+            return false;
+        }
+
+        private Bitmap CaptureGameRegion()
+        {
+            Size size = new Size(wRect.Right - wRect.Left, wRect.Bottom - wRect.Top);
+            Bitmap bmp = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppArgb);
+            Graphics g = Graphics.FromImage(bmp);
+            g.CopyFromScreen(wRect.Left, wRect.Top, 0, 0, size);
+            return bmp;
         }
 
         private void processImage()
         {
             if (running) { return; }
+            
+            logger.Debug("Active Window : " + GetActiveWindowTitle());
             if (!GetActiveWindowTitle().StartsWith("League of ")) { return; }
             running = true;
 
-            listLog.Items.Clear();
-            listLog.Items.Add("Start capturing : " + DateTime.Now.ToString());
+            logger.Debug("Start capturing : " + DateTime.Now.ToString());
 
             List<Minion> l_minions = new List<Minion>();
             List<Minion> our_minions = new List<Minion>();
 
-            Bitmap bmp = new Bitmap(1024, 768, PixelFormat.Format32bppArgb);
-            Graphics g = Graphics.FromImage(bmp);
-            g.CopyFromScreen(wRect.Left, wRect.Top, 0, 0, new Size(wRect.Right - wRect.Left, wRect.Bottom - wRect.Top));
-
+            Bitmap bmp = CaptureGameRegion();
             BitmapData bmd = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
                                   System.Drawing.Imaging.ImageLockMode.ReadWrite,
                                   bmp.PixelFormat);
-            Point center = new Point(518, 343);
+            Point center = new Point( bmp.Width / 2,bmp.Height / 2);
             
             // find minions
             unsafe
@@ -226,7 +232,7 @@ namespace lolbot
                             l_minions.Add(m);
 
                             string msg = String.Format("Enemy x:{0} y:{1} hp:{2} all:{3} prec:{4}", x_org, y, hp, all, hp_perc);
-                            listLog.Items.Add(msg);
+                            logger.Debug(msg);
                         }
 
 
@@ -260,7 +266,7 @@ namespace lolbot
                             our_minions.Add(m);
 
                             string msg = String.Format("Our x:{0} y:{1} hp:{2} all:{3} prec:{4}", x_org, y, hp, all, hp_perc);
-                            listLog.Items.Add(msg);
+                            logger.Debug(msg);
                         }
                         
                         //byte b = row[x * PixelSize];   //Blue  0-255
@@ -302,7 +308,7 @@ namespace lolbot
             if ( mindist_our >= mindist_enemy)
             {
                 rClick(pHome);
-                listLog.Items.Add("Going Home");
+                logger.Debug("Going Home");
                 running = false;
                 return;
             }
@@ -326,7 +332,7 @@ namespace lolbot
 
             if (found)
             {
-                listLog.Items.Add( "Killing Minion");
+                logger.Debug( "Killing Minion");
                 rClick(target.p);
             }
             else
@@ -396,7 +402,7 @@ namespace lolbot
                         if (x.Y > 0) x.Y = 50 + (rand.Next() % 40 - 20);
                         if (x.Y < 0) x.Y = 600 + (rand.Next() % 40 - 20);
 
-                        listLog.Items.Add("escape to center");
+                        logger.Debug("escape to center");
                         rClick(x);
 
                     }
@@ -409,7 +415,7 @@ namespace lolbot
                         if (x.Y > 0) x.Y = 600 + (rand.Next() % 40 - 20);
                         if (x.Y < 0) x.Y = 50 + (rand.Next() % 40 - 20);
 
-                        listLog.Items.Add("Move to center");
+                        logger.Debug("Move to center");
                         rClick(x);
                     }
                 }
@@ -446,7 +452,7 @@ namespace lolbot
             //mouse_event(MOUSEEVENTF_RIGHTUP, (uint)Cursor.Position.X, (uint)Cursor.Position.Y, 0, 0);
         }
         private void Start()
-        {
+        { 
             timer1.Enabled = true;
         }
         private void End()
@@ -483,6 +489,20 @@ namespace lolbot
         private void From1_Closed(object sender, FormClosedEventArgs e)
         {
             FinishBot();
+        }
+
+        string workingImgFilePath;
+
+        private void chooseFile_Click(object sender, EventArgs e)
+        {
+            logger.Info("Capturing game screen to save.");
+            Bitmap bmp = CaptureGameRegion();
+
+            saveImgFileDialog1.InitialDirectory = "D:";
+            saveImgFileDialog1.Filter = "BMP Images|*.bmp";
+            saveImgFileDialog1.ShowDialog();
+            bmp.Save(saveImgFileDialog1.FileName);
+            logger.Info("Capture saved as : " + saveImgFileDialog1.FileName);
         }
     }
 }
