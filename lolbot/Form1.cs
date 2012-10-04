@@ -20,6 +20,61 @@ using log4net;
 
 namespace lolbot
 {
+    public class Minion
+    {
+        public Point p;
+        List<TimedHP> hpQ = new List<TimedHP>();
+
+        private int FRESH_TIME = 3000;
+
+        private struct TimedHP
+        {
+            public int timeStamp; // in seconds
+            public float hp;
+        }
+
+        public void Update(Point p_new, int timestamp, float hp)
+        {
+            p = p_new;
+            // remove old ones
+            hpQ = hpQ.FindAll(delegate(TimedHP thp) { return timestamp - thp.timeStamp <= FRESH_TIME; });
+
+            TimedHP newthp = new TimedHP();
+            newthp.hp = hp;
+            newthp.timeStamp = timestamp;
+            hpQ.Add(newthp);
+            
+        }
+
+        public float GetPredictionAfter(int seconds)
+        {
+            TimedHP recent = hpQ.Last();
+            TimedHP oldest = hpQ.First();
+
+            // calc simple deriv
+            double dx = recent.timeStamp - oldest.timeStamp;
+
+            if(dx <= 0.0){ return recent.hp; }
+            double dy = recent.hp - oldest.hp;
+            double result = recent.hp + dy / dx * seconds;
+            return (float)result;
+        }
+
+        public override string ToString()
+        {
+            TimedHP recent = hpQ.Last();
+            StringBuilder builder = new StringBuilder();
+            builder.Append("(" + p.ToString() + ") : [");
+            foreach(TimedHP thp in hpQ){
+                builder.Append("( " + (thp.timeStamp - recent.timeStamp).ToString() + "," + thp.hp + "), ");
+            }
+            builder.Append("]");
+            return builder.ToString();
+
+        }
+    }
+
+
     public partial class Form1 : Form
     {
         //[System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -88,15 +143,8 @@ namespace lolbot
             return "";
         }
 
-        
 
-        public struct Minion
-        {
-            public Point p;
-            public double dist;
-            public float hp;
-        }
-
+        int TIME_PER_ATTACK = 500;
         Point pHome = new Point(936, 780);
         IntPtr hWnd = IntPtr.Zero;
         RECT wRect = new RECT();
@@ -180,14 +228,24 @@ namespace lolbot
             return bmp;
         }
 
+        // managed minions
+        List<Minion> enemy_minions = new List<Minion>();
+        public class MinionCandidate
+        {
+            public Point p;
+            public float hp;
+        }
+
+
         private void processImage(Bitmap bmp, Boolean doAction)
         {
             
+            int timestamp = Environment.TickCount & Int32.MaxValue;
             logger.Debug("Start process image : " + DateTime.Now.ToString());
 
             // Image State
-            List<Minion> l_minions = new List<Minion>();
-            List<Minion> our_minions = new List<Minion>();
+            List<MinionCandidate> l_MinionCandidates = new List<MinionCandidate>();
+            List<MinionCandidate> our_MinionCandidates = new List<MinionCandidate>();
             
             
             BitmapData bmd = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
@@ -196,7 +254,7 @@ namespace lolbot
             Point center = new Point( bmp.Width / 2,bmp.Height / 2);
             
             
-            // find minions
+            // find MinionCandidates
             unsafe
             {
                 int BLUE_OFFSET = 0;
@@ -205,11 +263,11 @@ namespace lolbot
                 int ALPHA_OFFSET = 3;
 
                 int healthbar_width_half = 32;
-                int minion_height_half = 22;
+                int MinionCandidate_height_half = 22;
             
                 int PixelSize=4;
 
-                // find minions
+                // find MinionCandidates
                 for (int y = 1; y < bmd.Height; y++)
                 {
                     // blue, green, red, alpha
@@ -241,14 +299,13 @@ namespace lolbot
                             if (all < 30) { continue; }
                             if (all > 70) { continue; }
                             float hp_perc = (float)hp / (float)all;
-                            Minion m = new Minion();
+                            MinionCandidate m = new MinionCandidate();
                             m.p.X = x_org + healthbar_width_half;
-                            m.p.Y = y + minion_height_half;
+                            m.p.Y = y + MinionCandidate_height_half;
                             m.hp = hp_perc;
-                            m.dist = DistanceTo(m.p, center);
-                            l_minions.Add(m);
+                            l_MinionCandidates.Add(m);
 
-                            string msg = String.Format("Enemy x:{0} y:{1} hp:{2} all:{3} prec:{4}", x_org, y, hp, all, hp_perc);
+                            string msg = String.Format("Enemy x:{0} y:{1} hp:{2} all:{3} prec:{4}", m.p.X, m.p.Y, hp, all, hp_perc);
                             logger.Debug(msg);
                         }
 
@@ -275,14 +332,13 @@ namespace lolbot
                             if (all < 30) { continue; }
                             if (all > 70) { continue; }
                             float hp_perc = (float)hp / (float)all;
-                            Minion m = new Minion();
+                            MinionCandidate m = new MinionCandidate();
                             m.p.X = x_org + 32;
                             m.p.Y = y + 22;
                             m.hp = hp_perc;
-                            m.dist = DistanceTo(m.p, center);
-                            our_minions.Add(m);
+                            our_MinionCandidates.Add(m);
 
-                            string msg = String.Format("Our x:{0} y:{1} hp:{2} all:{3} prec:{4}", x_org, y, hp, all, hp_perc);
+                            string msg = String.Format("Our x:{0} y:{1} hp:{2} all:{3} prec:{4}", m.p.X, m.p.Y, hp, all, hp_perc);
                             logger.Debug(msg);
                         }
                         
@@ -292,87 +348,108 @@ namespace lolbot
                         //byte al = row[x * PixelSize + 3]; //Alpha 0-255
                     }
                 }
-
-                // read minimap
-                
-                for (int y = (int)(0.7 * bmd.Height); y < bmd.Height; y++)
-                {
-                    // blue, green, red, alpha
-                    byte* prevrow = (byte*)bmd.Scan0 + ((y - 1) * bmd.Stride);
-                    byte* row = (byte*)bmd.Scan0 + (y * bmd.Stride);
-
-                    for (int x = (int)(0.7 * bmd.Width); x < bmd.Width; x++)
-                    {
-                        // red
-                        byte p1 = prevrow[(x - 1) * PixelSize + RED_OFFSET];
-                        byte p2 = prevrow[(x) * PixelSize + RED_OFFSET];
-                        byte p3 = row[(x - 1) * PixelSize + RED_OFFSET];
-                        byte p4 = row[(x) * PixelSize + RED_OFFSET];
-                    }
-                }
             }
             bmp.UnlockBits(bmd);
 
+
+            // Match MinionCandidates with Minions
+            List<Minion> new_enemy_list = new List<Minion>();
+            while (l_MinionCandidates.Count > 0)
+            {
+                if(enemy_minions.Count <= 0){
+                    // no more managed known minions
+                    // put all remaining minion candidates into new list
+                    foreach( MinionCandidate mc in l_MinionCandidates ){
+                        Minion new_minion = new Minion();
+                        new_minion.Update( mc.p, timestamp, mc.hp );
+                        new_enemy_list.Add(new_minion);
+                        logger.Debug("[Minion] New     : " + new_minion.ToString() + " Expected HP:" + new_minion.GetPredictionAfter(TIME_PER_ATTACK).ToString());
+                    }
+                    break;
+                }
+
+                // find closest pair
+                Minion closest_m = null;
+                MinionCandidate closest_mc = null;
+                double min_dist = double.MaxValue;
+                foreach (MinionCandidate mc in l_MinionCandidates)
+                {
+                    foreach (Minion m in enemy_minions)
+                    {
+                        double dist = DistanceTo(mc.p, m.p);
+                        if (dist < min_dist)
+                        {
+                            min_dist = dist;
+                            closest_m = m;
+                            closest_mc = mc;
+                        }
+                    }
+                }
+                closest_m.Update(closest_mc.p, timestamp, closest_mc.hp);
+                new_enemy_list.Add(closest_m);
+                logger.Debug("[Minion] Matched : " + closest_m.ToString() + " Expected HP:" + closest_m.GetPredictionAfter(TIME_PER_ATTACK));
+
+                l_MinionCandidates.Remove(closest_mc);
+                enemy_minions.Remove(closest_m);
+            }
+            enemy_minions = new_enemy_list;
+            
             // decide actions
             if (doAction)
             {
-                double advcnt = Math.Max(0.0, (double)(l_minions.Count) / our_minions.Count - 1.0);
-                double thres = 0.15 + 0.1 * advcnt;
+                double thres = 0.1;
 
-
-                Boolean found = false;
-                Minion target;
-                target.p = Point.Empty;
-
-
-                double mindist_enemy = 99999.0;
-                double mindist_our = 99999.0;
-                foreach (Minion m in l_minions)
+                
+                double mindist_enemy = double.MaxValue;
+                double mindist_our = double.MaxValue;
+                foreach (Minion m in enemy_minions)
                 {
-                    if (m.dist < mindist_enemy)
+                    if (DistanceTo(m.p, center) < mindist_enemy)
                     {
-                        mindist_enemy = m.dist;
+                        mindist_enemy = DistanceTo(m.p, center);
                     }
                 }
-                foreach (Minion m in our_minions)
+                foreach (MinionCandidate m in our_MinionCandidates)
                 {
-                    if (m.dist < mindist_our)
+                    if (DistanceTo(m.p, center) < mindist_our)
                     {
-                        mindist_our = m.dist;
+                        mindist_our = DistanceTo(m.p, center);
                     }
                 }
 
-                if (mindist_our >= mindist_enemy)
+                if (mindist_our >= mindist_enemy || ( our_MinionCandidates.Count <= 1 && l_MinionCandidates.Count > 2 ) )
                 {
                     rClick(pHome);
                     logger.Debug("Going Home");
-                    running = false;
                     return;
                 }
 
+                Boolean found = false;
+                Point target;
+                target = Point.Empty;
+
                 // lost shot first
-                foreach (Minion m in l_minions)
+                foreach (Minion m in enemy_minions)
                 {
-                    if (m.hp < thres)
+                    if (m.GetPredictionAfter(TIME_PER_ATTACK) < thres)
                     {
-                        if (found && DistanceTo(m.p, center) < DistanceTo(target.p, center))
+                        if (found && DistanceTo(m.p, center) < DistanceTo(target, center))
                         {
-                            target = m;
+                            target = m.p;
                         }
                         else
                         {
                             found = true;
-                            target = m;
+                            target = m.p;
                         }
                     }
                 }
 
-
-
                 if (found)
                 {
                     logger.Debug("Killing Minion");
-                    rClick(target.p);
+                    rClick(target);
+                    Thread.Sleep(TIME_PER_ATTACK / 2);
                 }
                 else
                 {
@@ -384,46 +461,48 @@ namespace lolbot
                     int size = 0;
 
                     Point closest = new Point();
-                    // need to close our minion
-                    foreach (Minion m in our_minions)
-                    {
-                        if (DistanceTo(m.p, center) < mindist)
-                        {
-                            mindist = DistanceTo(m.p, center);
-                            closest = m.p;
-                        }
-                    }
+                    //// need to close our minion
+                    //// if 
+                    //foreach (MinionCandidate m in our_MinionCandidates)
+                    //{
+                    //    if (DistanceTo(m.p, center) < mindist)
+                    //    {
+                    //        mindist = DistanceTo(m.p, center);
+                    //        closest = m.p;
+                    //    }
+                    //}
 
-                    if (mindist > 300 && mindist < 1000)
-                    {
-                        size = 1;
-                        farest = closest;
-                        maxdist = 99999.0;
-                    }
+                    //if (400 < mindist)
+                    //{
+                    //    size = 1;
+                    //    farest = closest;
+                    //    maxdist = 99999.0;
+                    //}
 
                     if (size == 0)
                     {
-                        foreach (Minion m in l_minions)
+                        foreach (Minion m in enemy_minions)
                         {
-                            if (m.hp < 0.5)
+                            double expHP = m.GetPredictionAfter(TIME_PER_ATTACK);
+                            if ( expHP < 0.5)
                             {
                                 size += 1;
 
-                                if (m.hp < minhp)
+                                if (m.GetPredictionAfter(TIME_PER_ATTACK) < minhp)
                                 {
                                     maxdist = DistanceTo(m.p, center);
                                     farest = m.p;
-                                    minhp = m.hp;
+                                    minhp = expHP;
                                 }
                             }
                         }
                     }
 
-                    if (size == 0 && our_minions.Count > 0)
+                    if (size == 0 && our_MinionCandidates.Count > 0)
                     {
                         // follow our minion
                         maxdist = 999.0;
-                        farest = our_minions[0].p;
+                        farest = our_MinionCandidates[0].p;
                         size = 1;
                     }
 
@@ -434,15 +513,17 @@ namespace lolbot
                         Point x = new Point();
                         if (maxdist < range)
                         {
-                            x.X = farest.X - center.X;
-                            x.Y = farest.Y - center.Y;
-                            if (x.X > 0) x.X = 30 + (rand.Next() % 40 - 20);
-                            if (x.X < 0) x.X = 800 + (rand.Next() % 40 - 20);
-                            if (x.Y > 0) x.Y = 50 + (rand.Next() % 40 - 20);
-                            if (x.Y < 0) x.Y = 600 + (rand.Next() % 40 - 20);
+                            //x.X = farest.X - center.X;
+                            //x.Y = farest.Y - center.Y;
+                            //if (x.X > 0) x.X = 30 + (rand.Next() % 40 - 20);
+                            //if (x.X < 0) x.X = 800 + (rand.Next() % 40 - 20);
+                            //if (x.Y > 0) x.Y = 50 + (rand.Next() % 40 - 20);
+                            //if (x.Y < 0) x.Y = 600 + (rand.Next() % 40 - 20);
+                            // logger.Debug("escape to center");
+                            // rClick(x);
 
-                            logger.Debug("escape to center");
-                            rClick(x);
+                            logger.Debug("Stay center");
+                            rClick(center);
 
                         }
                         else if (maxdist > range)
