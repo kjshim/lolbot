@@ -25,7 +25,7 @@ namespace lolbot
         public Point p;
         List<TimedHP> hpQ = new List<TimedHP>();
 
-        private int FRESH_TIME = 3000;
+        private int FRESH_TIME = 2500;
 
         private struct TimedHP
         {
@@ -281,11 +281,11 @@ namespace lolbot
                         byte p2 = prevrow[(x) * PixelSize + RED_OFFSET];
                         byte p3 = row[(x - 1) * PixelSize + RED_OFFSET];
                         byte p4 = row[(x) * PixelSize + RED_OFFSET];
-                        if (p1 == 0 && p2 == 0 && p3 == 0 && p4 == 255)
+                        if (p1 == 0 && p2 == 0 && p3 == 0 && p4 >170)
                         {
                             int x_org = x;
                             int hp = 0;
-                            while (row[x * PixelSize + RED_OFFSET] == 255)
+                            while (row[x * PixelSize + RED_OFFSET] >170)
                             {
                                 x++;
                             }
@@ -297,7 +297,10 @@ namespace lolbot
                             }
                             int all = x - x_org;
                             if (all < 30) { continue; }
-                            if (all > 70) { continue; }
+                            if (all > 70) {
+                                logger.Debug("Found Champ maybe? All length:" + all.ToString() + " x:" + (x_org + 60).ToString() + " y:" + (y + 70).ToString());
+                                continue; 
+                            }
                             float hp_perc = (float)hp / (float)all;
                             MinionCandidate m = new MinionCandidate();
                             m.p.X = x_org + healthbar_width_half;
@@ -397,10 +400,9 @@ namespace lolbot
             // decide actions
             if (doAction)
             {
-                double thres = 0.1;
+                double thres = 0.09 * Math.Max((our_MinionCandidates.Count / (enemy_minions.Count+1))*0.8, 1.0);
 
-                
-                double mindist_enemy = double.MaxValue;
+                double mindist_enemy = double.MaxValue / 2 ;
                 double mindist_our = double.MaxValue;
                 foreach (Minion m in enemy_minions)
                 {
@@ -417,10 +419,11 @@ namespace lolbot
                     }
                 }
 
-                if (mindist_our >= mindist_enemy || ( our_MinionCandidates.Count <= 1 && l_MinionCandidates.Count > 2 ) )
+                logger.Debug("Min dist our:" + mindist_our.ToString() + " Min dist enemy: " + mindist_enemy.ToString());
+                if(!(mindist_our + 50 < mindist_enemy))
                 {
                     rClick(pHome);
-                    logger.Debug("Going Home");
+                    logger.Debug("Going Home. Min dist our:" + mindist_our.ToString() + " Min dist enemy: " + mindist_enemy.ToString());
                     return;
                 }
 
@@ -509,7 +512,7 @@ namespace lolbot
                     if (size > 0)
                     {
                         Random rand = new Random();
-                        double range = 150.0;
+                        double range = 170.0;
                         Point x = new Point();
                         if (maxdist < range)
                         {
@@ -528,8 +531,9 @@ namespace lolbot
                         }
                         else if (maxdist > range)
                         {
+                            // stay slightly above ( to avoid champ HP bar overlay )
                             x.X = farest.X - center.X;
-                            x.Y = farest.Y - center.Y;
+                            x.Y = (farest.Y - 50) - center.Y;
                             if (x.X > 0) x.X = 800 + (rand.Next() % 40 - 20);
                             if (x.X < 0) x.X = 30 + (rand.Next() % 40 - 20);
                             if (x.Y > 0) x.Y = 600 + (rand.Next() % 40 - 20);
